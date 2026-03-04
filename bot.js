@@ -31,22 +31,6 @@ function createBot() {
   });
 
   let delayLong = false;
-  let hypnosCalled = false; // Gọi Hypnos chưa?
-
-  // CHECK INVENTORY MỖI 10 GIÂY
-  const inventoryCheckInterval = setInterval(() => {
-    try {
-      if (bot.inventory && !hypnosCalled) {
-        if (bot.inventory.emptySlotCount() === 0) {
-          bot.chat('@Hypnos');
-          console.log(`[LOG] Inventory FULL - Called Hypnos (1 lần)`);
-          hypnosCalled = true; // Đánh dấu đã gọi, không gọi lại nữa
-        }
-      }
-    } catch (err) {
-      // silent
-    }
-  }, 10000);
 
   // 1. XỬ LÝ TIN NHẮN CHAT
   bot.on('message', (jsonMsg) => {
@@ -60,7 +44,6 @@ function createBot() {
         cleanMessage.includes(BOT_NAME.toLowerCase()) && cleanMessage.includes('offline')) {
       console.log(`[COMMAND] Offline command`);
       delayLong = true;
-      clearInterval(inventoryCheckInterval);
       bot.quit('Shutdown');
       return;
     }
@@ -98,7 +81,6 @@ function createBot() {
   // 2. LOGIN
   bot.once('spawn', () => {
     console.log(`[LOG] Spawned`);
-    hypnosCalled = false; // Reset khi spawn
     setTimeout(() => {
       bot.chat('/login hung2312');
       setTimeout(() => {
@@ -110,7 +92,6 @@ function createBot() {
   // 3. DISCONNECT
   bot.on('end', () => {
     bot.removeAllListeners();
-    clearInterval(inventoryCheckInterval);
     
     let reconnectDelay = delayLong ? 60000 : 3000;
     if (delayLong) {
