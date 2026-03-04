@@ -11,7 +11,7 @@ http.createServer((req, res) => {
 const CONFIG = {
   host: 'pe.notmc.net',
   port: 25565,
-  username: 'DreamMask_',
+  username: 'NoobMaster69',
   version: '1.21.8',
   auth: 'offline',
   serverCommand: '/server earth'
