@@ -18,7 +18,7 @@ const CONFIG = {
 };
 
 const ALLOWED_USERS = ['Hypnos'];
-const BOT_NAME = 'DreamMask';
+const BOT_NAME = 'NoobMaster';
 
 function createBot() {
   const bot = mineflayer.createBot({
