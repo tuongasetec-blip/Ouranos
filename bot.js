@@ -11,14 +11,14 @@ http.createServer((req, res) => {
 const CONFIG = {
   host: 'pe.notmc.net',
   port: 25565,
-  username: 'NoobMaster69',
+  username: 'DreamMask_',
   version: '1.21.8',
   auth: 'offline',
   serverCommand: '/server earth'
 };
 
 const ALLOWED_USERS = ['Hypnos'];
-const BOT_NAME = 'NoobMaster';
+const BOT_NAME = 'DreamMask';
 
 function createBot() {
   const bot = mineflayer.createBot({
