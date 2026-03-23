@@ -17,6 +17,7 @@ const CONFIG = {
   serverCommand: '/server earth',
   pmPassword: 'spawn',
   maxAttempts: 30,
+  checkInEveryN: 6, // Nhận đủ N thông báo mới điểm danh
 };
 
 const ALLOWED_USERS = ['Hypnos','GHypnos','Spelas','DreamMask_','Gzues','Empty'];
@@ -50,6 +51,7 @@ function createBot() {
   let isCheckingIn = false;
   let msgBuffer = [];
   let bufferTimer = null;
+  let checkInCount = 0; // đếm số lần nhận thông báo điểm danh
 
   // 1. LOG CHAT
   bot.on('message', (jsonMsg) => {
@@ -91,6 +93,13 @@ function createBot() {
           return;
         }
 
+        // Lệnh dropkey qua PM
+        if (command.trim() === 'dropkey') {
+          console.log(`${colors.green}[PM] Dropkey từ ${sender}${colors.reset}`);
+          dropKey();
+          return;
+        }
+
         console.log(`${colors.green}[PM] Thực thi: ${command}${colors.reset}`);
         bot.chat(command);
       }
@@ -111,7 +120,7 @@ function createBot() {
     }
 
     // Rejoin Earth
-    if (cleanMessage.includes('[thông báo]')) {
+    if (message.includes('[THÔNG BÁO]')) {
       console.log(`${colors.yellow}[SYSTEM] Bị kick về Lobby. Rejoin...${colors.reset}`);
       setTimeout(() => bot.chat(CONFIG.serverCommand), 5000);
     }
@@ -123,10 +132,34 @@ function createBot() {
 
     // Điểm danh
     if (cleanMessage.includes('chưa nhận hết phần thưởng')) {
-      console.log(`${colors.cyan}[ĐIỂM DANH] Phát hiện nhắc nhở, đang điểm danh...${colors.reset}`);
-      doCheckIn();
+      checkInCount++;
+      console.log(`${colors.cyan}[ĐIỂM DANH] Thông báo ${checkInCount}/${CONFIG.checkInEveryN}...${colors.reset}`);
+
+      if (checkInCount >= CONFIG.checkInEveryN) {
+        checkInCount = 0;
+        console.log(`${colors.cyan}[ĐIỂM DANH] Đủ ${CONFIG.checkInEveryN} lần, bắt đầu điểm danh!${colors.reset}`);
+        doCheckIn();
+      }
     }
   });
+
+  // DROPKEY
+  async function dropKey() {
+    try {
+      const items = bot.inventory.items().filter(item => item.name.includes('tripwire_hook'));
+      if (items.length === 0) {
+        console.log(`${colors.yellow}[DROPKEY] Không có tripwire_hook trong túi.${colors.reset}`);
+        return;
+      }
+      for (const item of items) {
+        await bot.tossStack(item);
+        await sleep(300);
+      }
+      console.log(`${colors.green}[DROPKEY] Đã drop ${items.length} tripwire_hook.${colors.reset}`);
+    } catch (err) {
+      console.log(`${colors.red}[DROPKEY] Lỗi: ${err.message}${colors.reset}`);
+    }
+  }
 
   // ĐIỂM DANH
   async function doCheckIn() {
