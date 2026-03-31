@@ -9,10 +9,10 @@ http.createServer((req, res) => {
 });
 
 const CONFIG = {
-  host: 'pe.notmc.net',
+  host: 'play.notmc.net',
   port: 25565,
   username: 'DreamMask_',
-  version: '1.21.8',
+  version: '1.21.1',
   auth: 'offline',
   serverCommand: '/server earth',
   pmPassword: 'spawn',
