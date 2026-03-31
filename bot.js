@@ -1,39 +1,40 @@
-const http = require('http');
-const mineflayer = require('mineflayer');
-
-http.createServer((req, res) => {
-  res.write("Bot is alive!");
-  res.end();
-}).listen(process.env.PORT || 8080, () => {
-  console.log(`HTTP server đang chạy ở port ${process.env.PORT || 8080}`);
-});
+const mineflayer = require('mineflayer')
+const http = require('http')
+const { Vec3 } = require('vec3')
 
 const CONFIG = {
-  host: 'play.notmc.net',
+  host: 'pe.notmc.net',
   port: 25565,
-  username: 'DreamMask_',
+  username: 'Ouranos',
   version: '1.21.1',
-  auth: 'offline',
-  serverCommand: '/server earth',
-  pmPassword: 'spawn',
-  maxAttempts: 30,
-  checkInEveryN: 6, // Nhận đủ N thông báo mới điểm danh
-};
+  password: 'hung2312',
 
-const ALLOWED_USERS = ['Hypnos','GHypnos','Spelas','DreamMask_','Gzues','Empty'];
-const BOT_NAME = 'DreamMask';
+  BERRY_ITEM: 'sweet_berries',
+  BERRY_BLOCK: 'sweet_berry_bush',
+  STACK_SIZE: 64,
+  TARGET_STACKS: 11,
+  DTNS_CMD: '/dtns',
+  TARGET_SLOT: 21,
 
-const colors = {
-  reset: "\x1b[0m",
-  cyan: "\x1b[36m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  red: "\x1b[31m",
-  magenta: "\x1b[35m",
-  white: "\x1b[37m"
-};
+  MAIN_SERVER: 'earth',
 
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  ALLOWED_USERS: ['Hypnos', 'GHypnos', 'Spelas', 'DreamMask_', 'Gzues', 'Empty'],
+  PM_PASSWORD: 'spawn',
+
+  GUI_WAIT_MS: 3000,
+  RECONNECT_DELAY_MS: 5000,
+  
+  CLICK_DELAY_MIN: 50,
+  CLICK_DELAY_MAX: 100,
+}
+
+const PORT = process.env.PORT || 8080
+http.createServer((_, res) => res.end('OK')).listen(PORT, () => {
+  console.log(`[HTTP] Listening on port ${PORT}`)
+})
+
+const log = (msg) => console.log(`[${CONFIG.username}] ${msg}`)
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 function createBot() {
   const bot = mineflayer.createBot({
@@ -41,201 +42,239 @@ function createBot() {
     port: CONFIG.port,
     username: CONFIG.username,
     version: CONFIG.version,
-    auth: CONFIG.auth,
-    checkTimeoutInterval: 60000,
-  });
+    skipValidation: true,
+  })
 
-  bot.setMaxListeners(100);
+  let isExchanging = false
+  let offlineRequested = false
+  let msgBuffer = []
+  let bufferTimer = null
+  let farmLoopRunning = false
 
-  let delayLong = false;
-  let isCheckingIn = false;
-  let msgBuffer = [];
-  let bufferTimer = null;
-  let checkInCount = 0; // đếm số lần nhận thông báo điểm danh
-
-  // 1. LOG CHAT
-  bot.on('message', (jsonMsg) => {
-    const time = new Date().toLocaleTimeString();
-    const message = jsonMsg.toString();
-    const cleanMessage = message.replace(/§[0-9a-fklmnor]/g, '').toLowerCase();
-
-    console.log(`${colors.white}[CHAT][${time}] ${message}${colors.reset}`);
-
-    // PM buffer
-    msgBuffer.push(message);
-    if (bufferTimer) clearTimeout(bufferTimer);
-    bufferTimer = setTimeout(() => {
-      const combined = msgBuffer.join('\n');
-      msgBuffer = [];
-
-      if (combined.includes('✉') && combined.includes('ᴛɪɴ ɴʜắɴ ʀɪêɴɢ')) {
-        const lines = combined.split('\n');
-        const senderLine = lines.find(l => l.includes('→'));
-        const contentLine = lines.find(l => l.includes('›'));
-        if (!senderLine || !contentLine) return;
-
-        const sender = senderLine.split('→')[0].trim().replace(/§[0-9a-fklmnor]/g, '').trim();
-        const content = contentLine.replace('›', '').trim().replace(/§[0-9a-fklmnor]/g, '').trim();
-
-        console.log(`${colors.magenta}[PM] Từ ${sender}: ${content}${colors.reset}`);
-
-        if (!ALLOWED_USERS.includes(sender)) {
-          console.log(`${colors.red}[PM] User không được phép: ${sender}${colors.reset}`);
-          return;
-        }
-
-        const parts = content.split(' ');
-        const password = parts[parts.length - 1];
-        const command = parts.slice(0, -1).join(' ');
-
-        if (password !== CONFIG.pmPassword) {
-          console.log(`${colors.red}[PM] Sai mật khẩu từ ${sender}${colors.reset}`);
-          return;
-        }
-
-        // Lệnh dropkey qua PM
-        if (command.trim() === 'dropkey') {
-          console.log(`${colors.green}[PM] Dropkey từ ${sender}${colors.reset}`);
-          dropKey();
-          return;
-        }
-
-        console.log(`${colors.green}[PM] Thực thi: ${command}${colors.reset}`);
-        bot.chat(command);
-      }
-    }, 300);
-
-    // Discord commands
-    const isFromAllowedUser = ALLOWED_USERS.some(user => message.includes(user));
-    if (isFromAllowedUser && message.includes('[Discord | Member]') && cleanMessage.includes(BOT_NAME.toLowerCase())) {
-      if (cleanMessage.includes('offline')) {
-        delayLong = true;
-        bot.quit();
-        return;
-      }
-      if (cleanMessage.includes('inv')) bot.chat('[inv]');
-      if (cleanMessage.includes('ping')) bot.chat('[ping]');
-      if (cleanMessage.includes('item')) bot.chat('[i]');
-      if (cleanMessage.includes('money')) bot.chat('[m]');
+  function countBerries() {
+    let total = 0
+    for (const item of bot.inventory.items()) {
+      if (item.name === CONFIG.BERRY_ITEM) total += item.count
     }
+    return total
+  }
 
-    // Rejoin Earth
-    if (message.includes('[THÔNG BÁO]')) {
-      console.log(`${colors.yellow}[SYSTEM] Bị kick về Lobby. Rejoin...${colors.reset}`);
-      setTimeout(() => bot.chat(CONFIG.serverCommand), 5000);
-    }
-
-    // Vào Earth → warp afk
-    if (cleanMessage.includes('overhaul era')) {
-      setTimeout(() => bot.chat('/warp afk'), 3000);
-    }
-
-    // Điểm danh
-    if (cleanMessage.includes('chưa nhận hết phần thưởng')) {
-      checkInCount++;
-      console.log(`${colors.cyan}[ĐIỂM DANH] Thông báo ${checkInCount}/${CONFIG.checkInEveryN}...${colors.reset}`);
-
-      if (checkInCount >= CONFIG.checkInEveryN) {
-        checkInCount = 0;
-        console.log(`${colors.cyan}[ĐIỂM DANH] Đủ ${CONFIG.checkInEveryN} lần, bắt đầu điểm danh!${colors.reset}`);
-        doCheckIn();
-      }
-    }
-  });
-
-  // DROPKEY
-  async function dropKey() {
+  async function equipBerries() {
+    const berryItem = bot.inventory.items().find(i => i.name === CONFIG.BERRY_ITEM)
+    if (!berryItem) return false
     try {
-      const items = bot.inventory.items().filter(item => item.name.includes('tripwire_hook'));
-      if (items.length === 0) {
-        console.log(`${colors.yellow}[DROPKEY] Không có tripwire_hook trong túi.${colors.reset}`);
-        return;
-      }
-      for (const item of items) {
-        await bot.tossStack(item);
-        await sleep(300);
-      }
-      console.log(`${colors.green}[DROPKEY] Đã drop ${items.length} tripwire_hook.${colors.reset}`);
-    } catch (err) {
-      console.log(`${colors.red}[DROPKEY] Lỗi: ${err.message}${colors.reset}`);
+      await bot.equip(berryItem, 'hand')
+      return true
+    } catch (e) {
+      return false
     }
   }
 
-  // ĐIỂM DANH
-  async function doCheckIn() {
-    if (isCheckingIn) return;
-    isCheckingIn = true;
+  // Rung nhẹ camera (tạo packet LOOK tự nhiên)
+  async function microShake() {
+    const originalYaw = bot.entity.yaw
+    const originalPitch = bot.entity.pitch
+    
+    const shakeYaw = originalYaw + (Math.random() - 0.5) * 0.02
+    const shakePitch = originalPitch + (Math.random() - 0.5) * 0.015
+    
+    await bot.look(shakeYaw, shakePitch, true)
+    await sleep(10 + Math.random() * 20)
+    await bot.look(originalYaw, originalPitch, true)
+  }
 
-    if (bot.currentWindow) {
-      bot.closeWindow(bot.currentWindow);
-      await sleep(500);
-    }
+  // Right click liên tục
+  async function farmLoop() {
+    if (farmLoopRunning) return
+    farmLoopRunning = true
+    log('[FARM] Bắt đầu click...')
 
-    let attempt = 0;
-    while (attempt < CONFIG.maxAttempts) {
-      attempt++;
+    // Đảm bảo cầm mọng
+    await equipBerries()
+    
+    let clickCount = 0
+
+    while (farmLoopRunning) {
       try {
-        bot.chat('/diemdanh');
-        await sleep(3000);
-
-        if (!bot.currentWindow) {
-          console.log(`${colors.red}[ĐIỂM DANH] Lần ${attempt}/${CONFIG.maxAttempts}: GUI không mở, thử lại sau 5s...${colors.reset}`);
-          await sleep(5000);
-          continue;
+        if (isExchanging) {
+          await sleep(500)
+          continue
         }
 
-        const win = bot.currentWindow;
-        const beaconSlot = win.slots.findIndex(item =>
-          item && item.name.includes('beacon')
-        );
-
-        if (beaconSlot === -1) {
-          console.log(`${colors.red}[ĐIỂM DANH] Lần ${attempt}/${CONFIG.maxAttempts}: Không thấy beacon, thử lại sau 5s...${colors.reset}`);
-          bot.closeWindow(win);
-          await sleep(5000);
-          continue;
+        const total = countBerries()
+        const stacks = Math.floor(total / CONFIG.STACK_SIZE)
+        
+        if (stacks >= CONFIG.TARGET_STACKS) {
+          log(`[FARM] Đủ ${stacks}/${CONFIG.TARGET_STACKS} stacks → đổi điểm`)
+          await doExchange()
+          await equipBerries() // Đổi xong cầm lại mọng
+          continue
         }
 
-        await sleep(500);
-        await bot.clickWindow(beaconSlot, 0, 0);
-        bot.closeWindow(win);
-        console.log(`${colors.green}[ĐIỂM DANH] Hoàn thành sau ${attempt} lần!${colors.reset}`);
-        isCheckingIn = false;
-        return;
-
+        // Right click vào block dưới chân (không check)
+        try {
+          const pos = bot.entity.position.floored()
+          const block = bot.blockAt(pos)
+          if (block) {
+            await bot.activateBlock(block)
+          }
+        } catch (e) {}
+        
+        clickCount++
+        
+        // Delay 50-100ms giữa các click
+        const delay = CONFIG.CLICK_DELAY_MIN + Math.random() * (CONFIG.CLICK_DELAY_MAX - CONFIG.CLICK_DELAY_MIN)
+        await sleep(delay)
+        
+        // Thỉnh thoảng rung nhẹ camera (10-15% số lần)
+        if (Math.random() < 0.12) {
+          await microShake()
+        }
+        
+        // Reset để tránh tràn
+        if (clickCount > 1000) clickCount = 0
+        
       } catch (err) {
-        console.log(`${colors.red}[ĐIỂM DANH] Lần ${attempt}/${CONFIG.maxAttempts}: ${err.message}. Thử lại sau 5s...${colors.reset}`);
-        if (bot.currentWindow) bot.closeWindow(bot.currentWindow);
-        await sleep(5000);
+        log(`[FARM] Lỗi: ${err.message}`)
+        await sleep(200)
       }
     }
-    console.log(`${colors.yellow}[ĐIỂM DANH] Bỏ qua sau ${CONFIG.maxAttempts} lần. Chờ tín hiệu mới...${colors.reset}`);
-    isCheckingIn = false;
   }
 
-  // 2. SPAWN
-  bot.once('spawn', () => {
-    console.log(`${colors.green}[LOG] Bot ${CONFIG.username} online.${colors.reset}`);
-    setTimeout(() => {
-      bot.chat('/login hung2312');
-      setTimeout(() => bot.chat(CONFIG.serverCommand), 10000);
-    }, 2000);
-  });
+  // Đổi điểm
+  async function doExchange() {
+    if (isExchanging) return
+    isExchanging = true
+    try {
+      bot.chat(CONFIG.DTNS_CMD)
+      
+      let window = null
+      for (let i = 0; i < 10; i++) {
+        if (bot.currentWindow) {
+          window = bot.currentWindow
+          break
+        }
+        await sleep(300)
+      }
+      
+      if (!window) {
+        log('[ĐỔI ĐIỂM] Không mở được GUI')
+        isExchanging = false
+        return
+      }
 
-  // 3. DISCONNECT
-  bot.on('end', () => {
-    bot.removeAllListeners();
-    let reconnectDelay = delayLong ? 60000 : 3000;
-    if (delayLong) {
-      console.log(`${colors.red}[DISCONNECT] Lệnh offline. Reconnect sau 60s...${colors.reset}`);
-      delayLong = false;
-    } else {
-      console.log(`${colors.red}[DISCONNECT] Reconnect sau 3s...${colors.reset}`);
+      await sleep(500)
+      
+      try {
+        await bot.simpleClick.leftMouse(CONFIG.TARGET_SLOT)
+        log('[ĐỔI ĐIỂM] Click thành công')
+      } catch (e) {
+        log(`[ĐỔI ĐIỂM] Click thất bại: ${e.message}`)
+      }
+
+      await sleep(300)
+      bot.closeWindow(window)
+    } catch (err) {
+      log(`[ĐỔI ĐIỂM] Lỗi: ${err.message}`)
+      if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
     }
-    setTimeout(createBot, reconnectDelay);
-  });
+    isExchanging = false
+  }
 
-  bot.on('error', (err) => console.log(`${colors.red}[ERR] ${err.message}${colors.reset}`));
+  async function joinMainServer() {
+    log(`Chuyển đến server ${CONFIG.MAIN_SERVER}...`)
+    bot.chat(`/server ${CONFIG.MAIN_SERVER}`)
+  }
+
+  function handlePrivateMessage(msg) {
+    msgBuffer.push(msg)
+    if (bufferTimer) clearTimeout(bufferTimer)
+    bufferTimer = setTimeout(async () => {
+      const combined = msgBuffer.join('\n')
+      msgBuffer = []
+      if (!combined.includes('✉') || !combined.includes('ᴛɪɴ ɴʜắɴ ʀɪêɴɢ')) return
+
+      const lines = combined.split('\n')
+      const senderLine = lines.find(l => l.includes('→'))
+      const contentLine = lines.find(l => l.includes('›'))
+      if (!senderLine || !contentLine) return
+
+      const sender = senderLine.split('→')[0].trim().replace(/§[0-9a-fklmnor]/g, '').trim()
+      const content = contentLine.replace('›', '').trim().replace(/§[0-9a-fklmnor]/g, '').trim()
+      if (!CONFIG.ALLOWED_USERS.includes(sender)) return
+
+      const parts = content.split(' ')
+      const password = parts[parts.length - 1]
+      const command = parts.slice(0, -1).join(' ').toLowerCase().trim()
+      if (password !== CONFIG.PM_PASSWORD) return
+
+      log(`[PM] Lệnh từ ${sender}: "${command}"`)
+      if (command === 'status') {
+        const total = countBerries()
+        bot.chat(`Có ${Math.floor(total / CONFIG.STACK_SIZE)}/${CONFIG.TARGET_STACKS} stacks`)
+      } else if (command === 'offline') {
+        offlineRequested = true
+        farmLoopRunning = false
+        bot.quit()
+      } else if (command === 'stop') {
+        farmLoopRunning = false
+        log('[FARM] Dừng')
+      } else if (command === 'start') {
+        farmLoop()
+      } else {
+        bot.chat(command)
+      }
+    }, 300)
+  }
+
+  bot.once('spawn', async () => {
+    log('Đã spawn!')
+    bot.physics.enabled = true
+
+    setTimeout(() => bot.chat(`/login ${CONFIG.password}`), 1500)
+
+    setTimeout(async () => {
+      await joinMainServer()
+      await sleep(4000)
+      farmLoop()
+    }, 3000)
+  })
+
+  bot.on('message', (jsonMsg) => {
+    const msg = jsonMsg.toString()
+    const cleanMsg = msg.replace(/§[0-9a-fklmnor]/g, '')
+
+    if (cleanMsg.includes('[THÔNG BÁO]') || cleanMsg.includes('disconnect') ||
+        cleanMsg.includes('kicked') || cleanMsg.includes('đã kết nối')) {
+      log(cleanMsg)
+    }
+
+    handlePrivateMessage(msg)
+
+    if (cleanMsg.includes('[THÔNG BÁO]')) {
+      setTimeout(() => bot.chat(`/server ${CONFIG.MAIN_SERVER}`), 5000)
+    }
+    if (cleanMsg.includes('disconnect') || cleanMsg.includes('kicked')) {
+      farmLoopRunning = false
+      setTimeout(() => bot.quit(), 1000)
+    }
+  })
+
+  bot.on('end', (reason) => {
+    log(`Ngắt kết nối: ${reason}`)
+    isExchanging = false
+    farmLoopRunning = false
+    const delay = offlineRequested ? 60000 : CONFIG.RECONNECT_DELAY_MS
+    setTimeout(createBot, delay)
+    offlineRequested = false
+  })
+
+  bot.on('error', (err) => {
+    if (err.code === 'ECONNREFUSED') log('Không thể kết nối, thử lại...')
+    else log(`Lỗi: ${err.message}`)
+  })
+
+  return bot
 }
 
-createBot();
+createBot()
