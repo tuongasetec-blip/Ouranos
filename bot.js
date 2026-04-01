@@ -6,7 +6,7 @@ const CONFIG = {
   host: 'pe.notmc.net',
   port: 25565,
   username: 'Ouranos',
-  version: '1.21.1',
+  version: '1.21',
   password: 'hung2312',
 
   BERRY_ITEM: 'sweet_berries',
