@@ -43,6 +43,7 @@ function createBot() {
     username: CONFIG.username,
     version: CONFIG.version,
     skipValidation: true,
+    auth: 'offline', // Thêm auth offline
   })
 
   let isExchanging = false
@@ -50,6 +51,9 @@ function createBot() {
   let msgBuffer = []
   let bufferTimer = null
   let farmLoopRunning = false
+  let clickCount = 0
+  let successCount = 0
+  let failCount = 0
 
   function countBerries() {
     let total = 0
@@ -61,16 +65,23 @@ function createBot() {
 
   async function equipBerries() {
     const berryItem = bot.inventory.items().find(i => i.name === CONFIG.BERRY_ITEM)
-    if (!berryItem) return false
+    if (!berryItem) {
+      log('[DEBUG] ❌ KHÔNG CÓ sweet_berries trong inventory!')
+      return false
+    }
+    log(`[DEBUG] Có ${berryItem.count} sweet_berries trong inventory`)
+    
     try {
       await bot.equip(berryItem, 'hand')
+      log('[DEBUG] ✅ Đã cầm sweet_berries trên tay')
       return true
     } catch (e) {
+      log(`[DEBUG] ❌ Equip thất bại: ${e.message}`)
       return false
     }
   }
 
-  // Rung nhẹ camera (tạo packet LOOK tự nhiên)
+  // Rung nhẹ camera
   async function microShake() {
     const originalYaw = bot.entity.yaw
     const originalPitch = bot.entity.pitch
@@ -87,12 +98,18 @@ function createBot() {
   async function farmLoop() {
     if (farmLoopRunning) return
     farmLoopRunning = true
-    log('[FARM] Bắt đầu click...')
+    log('[FARM] ========== BẮT ĐẦU FARM ==========')
+    log('[FARM] Click delay: 50-100ms')
 
     // Đảm bảo cầm mọng
-    await equipBerries()
+    const hasBerries = await equipBerries()
+    if (!hasBerries) {
+      log('[FARM] ❌ Không có mọng để farm, thoát farm loop')
+      farmLoopRunning = false
+      return
+    }
     
-    let clickCount = 0
+    let lastLogTime = Date.now()
 
     while (farmLoopRunning) {
       try {
@@ -105,38 +122,84 @@ function createBot() {
         const stacks = Math.floor(total / CONFIG.STACK_SIZE)
         
         if (stacks >= CONFIG.TARGET_STACKS) {
-          log(`[FARM] Đủ ${stacks}/${CONFIG.TARGET_STACKS} stacks → đổi điểm`)
+          log(`[FARM] ✅ Đủ ${stacks}/${CONFIG.TARGET_STACKS} stacks → đổi điểm`)
           await doExchange()
-          await equipBerries() // Đổi xong cầm lại mọng
+          await equipBerries()
           continue
         }
 
-        // Right click vào block dưới chân (không check)
-        try {
-          const pos = bot.entity.position.floored()
-          const block = bot.blockAt(pos)
-          if (block) {
-            await bot.activateBlock(block)
-          }
-        } catch (e) {}
+        // LẤY THÔNG TIN BLOCK DƯỚI CHÂN
+        const pos = bot.entity.position.floored()
+        const block = bot.blockAt(pos)
         
+        log(`[DEBUG] Vị trí đang đứng: (${pos.x}, ${pos.y}, ${pos.z})`)
+        
+        if (!block) {
+          log('[DEBUG] ❌ KHÔNG CÓ BLOCK tại vị trí đang đứng!')
+          await sleep(1000)
+          continue
+        }
+        
+        log(`[DEBUG] Block dưới chân: "${block.name}" tại (${block.position.x}, ${block.position.y}, ${block.position.z})`)
+        
+        // KIỂM TRA CÓ ĐANG CẦM ĐÚNG ITEM KHÔNG
+        const heldItem = bot.heldItem
+        if (!heldItem) {
+          log('[DEBUG] ❌ Tay đang trống, không có item!')
+          await equipBerries()
+          await sleep(200)
+          continue
+        }
+        log(`[DEBUG] Đang cầm: "${heldItem.name}" (số lượng: ${heldItem.count})`)
+        
+        if (heldItem.name !== CONFIG.BERRY_ITEM) {
+          log(`[DEBUG] ⚠️ Đang cầm sai item (${heldItem.name}), cần cầm ${CONFIG.BERRY_ITEM}`)
+          await equipBerries()
+          await sleep(200)
+          continue
+        }
+        
+        // THỰC HIỆN CLICK
         clickCount++
+        log(`[DEBUG] ===== LẦN CLICK #${clickCount} =====`)
+        log(`[DEBUG] Đang thực hiện activateBlock vào block "${block.name}"...`)
+        
+        try {
+          const startTime = Date.now()
+          await bot.activateBlock(block)
+          const elapsed = Date.now() - startTime
+          successCount++
+          log(`[DEBUG] ✅ CLICK THÀNH CÔNG! (${elapsed}ms) - Tổng thành công: ${successCount}`)
+        } catch (err) {
+          failCount++
+          log(`[DEBUG] ❌ CLICK THẤT BẠI! Lỗi: ${err.message}`)
+          log(`[DEBUG] Tổng thất bại: ${failCount} / Thành công: ${successCount}`)
+          
+          // Thử equip lại nếu lỗi
+          if (err.message.includes('hand') || err.message.includes('item')) {
+            log('[DEBUG] Có vẻ vấn đề về item, thử equip lại...')
+            await equipBerries()
+          }
+        }
+        
+        // Thống kê mỗi 10 giây
+        if (Date.now() - lastLogTime > 10000) {
+          log(`[STATS] Click: ${clickCount} lần | Thành công: ${successCount} | Thất bại: ${failCount} | Mọng: ${total}`)
+          lastLogTime = Date.now()
+        }
         
         // Delay 50-100ms giữa các click
         const delay = CONFIG.CLICK_DELAY_MIN + Math.random() * (CONFIG.CLICK_DELAY_MAX - CONFIG.CLICK_DELAY_MIN)
         await sleep(delay)
         
-        // Thỉnh thoảng rung nhẹ camera (10-15% số lần)
+        // Thỉnh thoảng rung nhẹ camera
         if (Math.random() < 0.12) {
           await microShake()
         }
         
-        // Reset để tránh tràn
-        if (clickCount > 1000) clickCount = 0
-        
       } catch (err) {
-        log(`[FARM] Lỗi: ${err.message}`)
-        await sleep(200)
+        log(`[FARM] Lỗi vòng lặp: ${err.message}`)
+        await sleep(500)
       }
     }
   }
@@ -145,8 +208,10 @@ function createBot() {
   async function doExchange() {
     if (isExchanging) return
     isExchanging = true
+    log('[EXCHANGE] Bắt đầu đổi điểm...')
     try {
       bot.chat(CONFIG.DTNS_CMD)
+      log('[EXCHANGE] Đã gửi lệnh /dtns')
       
       let window = null
       for (let i = 0; i < 10; i++) {
@@ -158,27 +223,32 @@ function createBot() {
       }
       
       if (!window) {
-        log('[ĐỔI ĐIỂM] Không mở được GUI')
+        log('[EXCHANGE] ❌ Không mở được GUI sau 3 giây')
         isExchanging = false
         return
       }
 
+      log(`[EXCHANGE] ✅ GUI đã mở: "${window.title}"`)
       await sleep(500)
       
       try {
         await bot.simpleClick.leftMouse(CONFIG.TARGET_SLOT)
-        log('[ĐỔI ĐIỂM] Click thành công')
+        log(`[EXCHANGE] ✅ Click thành công vào slot ${CONFIG.TARGET_SLOT}`)
       } catch (e) {
-        log(`[ĐỔI ĐIỂM] Click thất bại: ${e.message}`)
+        log(`[EXCHANGE] ❌ Click thất bại: ${e.message}`)
       }
 
       await sleep(300)
       bot.closeWindow(window)
+      log('[EXCHANGE] Đã đóng GUI')
     } catch (err) {
-      log(`[ĐỔI ĐIỂM] Lỗi: ${err.message}`)
+      log(`[EXCHANGE] ❌ Lỗi: ${err.message}`)
       if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
     }
     isExchanging = false
+    
+    const newTotal = countBerries()
+    log(`[EXCHANGE] Hoàn tất! Còn ${Math.floor(newTotal / CONFIG.STACK_SIZE)} stacks (${newTotal} mọng)`)
   }
 
   async function joinMainServer() {
@@ -211,14 +281,14 @@ function createBot() {
       log(`[PM] Lệnh từ ${sender}: "${command}"`)
       if (command === 'status') {
         const total = countBerries()
-        bot.chat(`Có ${Math.floor(total / CONFIG.STACK_SIZE)}/${CONFIG.TARGET_STACKS} stacks`)
+        bot.chat(`Có ${Math.floor(total / CONFIG.STACK_SIZE)}/${CONFIG.TARGET_STACKS} stacks (${total} mọng)`)
       } else if (command === 'offline') {
         offlineRequested = true
         farmLoopRunning = false
         bot.quit()
       } else if (command === 'stop') {
         farmLoopRunning = false
-        log('[FARM] Dừng')
+        log('[FARM] Đã dừng theo yêu cầu')
       } else if (command === 'start') {
         farmLoop()
       } else {
@@ -228,14 +298,35 @@ function createBot() {
   }
 
   bot.once('spawn', async () => {
-    log('Đã spawn!')
+    log('========================================')
+    log('✅ BOT ĐÃ SPAWN THÀNH CÔNG!')
+    log('========================================')
     bot.physics.enabled = true
 
-    setTimeout(() => bot.chat(`/login ${CONFIG.password}`), 1500)
+    setTimeout(() => {
+      log('[LOGIN] Đang đăng nhập...')
+      bot.chat(`/login ${CONFIG.password}`)
+    }, 1500)
 
     setTimeout(async () => {
       await joinMainServer()
       await sleep(4000)
+      
+      // Kiểm tra inventory trước khi farm
+      const berries = countBerries()
+      log(`[INIT] Có ${berries} sweet_berries trong inventory (${Math.floor(berries / CONFIG.STACK_SIZE)} stacks)`)
+      
+      // Kiểm tra block dưới chân
+      const pos = bot.entity.position.floored()
+      const block = bot.blockAt(pos)
+      log(`[INIT] Block dưới chân: ${block ? block.name : 'KHÔNG CÓ BLOCK'}`)
+      
+      if (block && block.name === CONFIG.BERRY_BLOCK) {
+        log('[INIT] ✅ Đã có bụi mọng dưới chân, bắt đầu farm!')
+      } else {
+        log(`[INIT] ⚠️ Block dưới chân là "${block?.name}", không phải bụi mọng. Cần đặt bụi mọng trước!`)
+      }
+      
       farmLoop()
     }, 3000)
   })
@@ -246,7 +337,7 @@ function createBot() {
 
     if (cleanMsg.includes('[THÔNG BÁO]') || cleanMsg.includes('disconnect') ||
         cleanMsg.includes('kicked') || cleanMsg.includes('đã kết nối')) {
-      log(cleanMsg)
+      log(`[SERVER] ${cleanMsg}`)
     }
 
     handlePrivateMessage(msg)
@@ -261,17 +352,18 @@ function createBot() {
   })
 
   bot.on('end', (reason) => {
-    log(`Ngắt kết nối: ${reason}`)
+    log(`[END] Ngắt kết nối: ${reason}`)
     isExchanging = false
     farmLoopRunning = false
     const delay = offlineRequested ? 60000 : CONFIG.RECONNECT_DELAY_MS
+    log(`[END] Sẽ reconnect sau ${delay/1000} giây...`)
     setTimeout(createBot, delay)
     offlineRequested = false
   })
 
   bot.on('error', (err) => {
-    if (err.code === 'ECONNREFUSED') log('Không thể kết nối, thử lại...')
-    else log(`Lỗi: ${err.message}`)
+    if (err.code === 'ECONNREFUSED') log('[ERROR] Không thể kết nối tới server!')
+    else log(`[ERROR] ${err.message}`)
   })
 
   return bot
