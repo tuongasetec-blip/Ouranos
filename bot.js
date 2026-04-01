@@ -6,7 +6,7 @@ const CONFIG = {
   host: 'pe.notmc.net',
   port: 25565,
   username: 'Ouranos',
-  version: '1.21.4',
+  version: '1.21.1',
   password: 'hung2312',
 
   BERRY_ITEM: 'sweet_berries',
@@ -50,13 +50,40 @@ function createBot() {
   let msgBuffer = []
   let bufferTimer = null
   let farmLoopRunning = false
+  
+  let currentBerries = 0
+  let lastBerryCount = 0
 
-  function countBerries() {
+  // Vung tay phải
+  function swingArm() {
+    try {
+      bot._client.write('arm_animation', { hand: 0 })
+    } catch (e) {}
+  }
+
+  function updateBerryCount() {
     let total = 0
     for (const item of bot.inventory.items()) {
       if (item.name === CONFIG.BERRY_ITEM) total += item.count
     }
-    return total
+    currentBerries = total
+    
+    if (currentBerries !== lastBerryCount) {
+      const stacks = Math.floor(currentBerries / CONFIG.STACK_SIZE)
+      log(`🍓 Mọng: ${currentBerries} cái (${stacks}/${CONFIG.TARGET_STACKS} stacks)`)
+      lastBerryCount = currentBerries
+    }
+    return currentBerries
+  }
+
+  bot.on('inventoryWindow', () => updateBerryCount())
+  bot.on('itemUpdate', () => updateBerryCount())
+  bot.on('playerCollect', (collector) => {
+    if (collector === bot.entity) setTimeout(() => updateBerryCount(), 50)
+  })
+
+  function countBerries() {
+    return updateBerryCount()
   }
 
   async function equipBerries() {
@@ -70,9 +97,7 @@ function createBot() {
     }
   }
 
-  // Lấy tọa độ an toàn (không bị NaN)
   function getSafePosition() {
-    // Ưu tiên từ player object
     const player = bot.players[bot.username]
     if (player && player.entity && player.entity.position) {
       const pos = player.entity.position
@@ -80,15 +105,12 @@ function createBot() {
         return pos.floored()
       }
     }
-    
-    // Dùng từ entity
     if (bot.entity && bot.entity.position) {
       const pos = bot.entity.position
       if (!isNaN(pos.x) && !isNaN(pos.y) && !isNaN(pos.z)) {
         return pos.floored()
       }
     }
-    
     return null
   }
 
@@ -110,9 +132,11 @@ function createBot() {
     log('[FARM] Bắt đầu click...')
 
     await equipBerries()
+    updateBerryCount()
     
     let clickCount = 0
     let lastValidPos = null
+    let lastUpdateLog = Date.now()
 
     while (farmLoopRunning) {
       try {
@@ -121,21 +145,25 @@ function createBot() {
           continue
         }
 
-        const total = countBerries()
+        if (Date.now() - lastUpdateLog > 5000) {
+          updateBerryCount()
+          lastUpdateLog = Date.now()
+        }
+
+        const total = currentBerries
         const stacks = Math.floor(total / CONFIG.STACK_SIZE)
         
         if (stacks >= CONFIG.TARGET_STACKS) {
-          log(`[FARM] Đủ ${stacks}/${CONFIG.TARGET_STACKS} stacks → đổi điểm`)
+          log(`✅ Đủ ${stacks}/${CONFIG.TARGET_STACKS} stacks → đổi điểm`)
           await doExchange()
           await equipBerries()
+          updateBerryCount()
           continue
         }
 
-        // Lấy tọa độ
         let pos = getSafePosition()
         
         if (!pos) {
-          // Nếu chưa có, dùng tọa độ cũ
           if (lastValidPos) {
             pos = lastValidPos
           } else {
@@ -146,21 +174,22 @@ function createBot() {
           lastValidPos = pos
         }
         
-        // CÚI XUỐNG: nhìn xuống dưới chân
+        // Cúi xuống nhìn dưới chân
         await bot.lookAt(pos.offset(0.5, 0.1, 0.5), true)
         await sleep(20 + Math.random() * 30)
         
-        // CLICK CHUỘT PHẢI vào block dưới chân
+        // VUNG TAY TRƯỚC KHI CLICK
+        swingArm()
+        await sleep(10 + Math.random() * 20)
+        
+        // CLICK CHUỘT PHẢI
         const block = bot.blockAt(pos)
         if (block) {
           try {
             await bot.activateBlock(block)
             clickCount++
-          } catch (e) {
-            // Lỗi thì thôi, click tiếp
-          }
+          } catch (e) {}
         } else {
-          // Thử click vào block dưới chân -1
           const blockBelow = bot.blockAt(pos.offset(0, -1, 0))
           if (blockBelow) {
             try {
@@ -170,13 +199,17 @@ function createBot() {
           }
         }
         
-        // Delay 50-100ms
         const delay = CONFIG.CLICK_DELAY_MIN + Math.random() * (CONFIG.CLICK_DELAY_MAX - CONFIG.CLICK_DELAY_MIN)
         await sleep(delay)
         
-        // Thỉnh thoảng rung nhẹ
+        // Rung nhẹ camera
         if (Math.random() < 0.12) {
           await microShake()
+        }
+        
+        if (clickCount % 100 === 0 && clickCount > 0) {
+          const stacksNow = Math.floor(currentBerries / CONFIG.STACK_SIZE)
+          log(`📊 Click ${clickCount} lần | Mọng: ${currentBerries} (${stacksNow}/${CONFIG.TARGET_STACKS})`)
         }
         
         if (clickCount > 1000) clickCount = 0
@@ -190,6 +223,10 @@ function createBot() {
   async function doExchange() {
     if (isExchanging) return
     isExchanging = true
+    
+    const beforeExchange = currentBerries
+    log(`💰 Đổi điểm... (Có ${beforeExchange} mọng)`)
+    
     try {
       bot.chat(CONFIG.DTNS_CMD)
       
@@ -203,7 +240,7 @@ function createBot() {
       }
       
       if (!window) {
-        log('[ĐỔI ĐIỂM] Không mở được GUI')
+        log('❌ Không mở được GUI')
         isExchanging = false
         return
       }
@@ -212,14 +249,23 @@ function createBot() {
       
       try {
         await bot.simpleClick.leftMouse(CONFIG.TARGET_SLOT)
-        log('[ĐỔI ĐIỂM] Click thành công')
+        log('✅ Click đổi điểm thành công')
       } catch (e) {
-        log(`[ĐỔI ĐIỂM] Click thất bại: ${e.message}`)
+        log(`❌ Click thất bại: ${e.message}`)
       }
 
       await sleep(300)
       bot.closeWindow(window)
+      
+      await sleep(500)
+      updateBerryCount()
+      
+      const afterExchange = currentBerries
+      const exchanged = beforeExchange - afterExchange
+      log(`💰 Đã đổi ${exchanged} mọng | Còn: ${afterExchange} (${Math.floor(afterExchange / CONFIG.STACK_SIZE)} stacks)`)
+      
     } catch (err) {
+      log(`❌ Lỗi: ${err.message}`)
       if (bot.currentWindow) bot.closeWindow(bot.currentWindow)
     }
     isExchanging = false
@@ -254,8 +300,8 @@ function createBot() {
 
       log(`[PM] Lệnh từ ${sender}: "${command}"`)
       if (command === 'status') {
-        const total = countBerries()
-        bot.chat(`Có ${Math.floor(total / CONFIG.STACK_SIZE)}/${CONFIG.TARGET_STACKS} stacks`)
+        const total = currentBerries
+        bot.chat(`🍓 ${Math.floor(total / CONFIG.STACK_SIZE)}/${CONFIG.TARGET_STACKS} stacks (${total} mọng)`)
       } else if (command === 'offline') {
         offlineRequested = true
         farmLoopRunning = false
@@ -272,14 +318,17 @@ function createBot() {
   }
 
   bot.once('spawn', async () => {
-    log('Đã spawn!')
+    log('✅ Đã spawn!')
     bot.physics.enabled = true
-
+    
+    setTimeout(() => updateBerryCount(), 1000)
     setTimeout(() => bot.chat(`/login ${CONFIG.password}`), 1500)
 
     setTimeout(async () => {
       await joinMainServer()
       await sleep(4000)
+      updateBerryCount()
+      log(`🍓 Khởi tạo: ${currentBerries} mọng (${Math.floor(currentBerries / CONFIG.STACK_SIZE)}/${CONFIG.TARGET_STACKS} stacks)`)
       farmLoop()
     }, 3000)
   })
